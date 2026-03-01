@@ -78,7 +78,7 @@ namespace Python.Deployment
             Environment.SetEnvironmentVariable("PATH", $"{EmbeddedPythonHome};" + Environment.GetEnvironmentVariable("PATH"));
             if (!force && Directory.Exists(EmbeddedPythonHome) && File.Exists(Path.Combine(EmbeddedPythonHome, "python.exe"))) // python seems installed, so exit
                 return;
-            var zip = await Source.RetrievePythonZip(InstallPath);
+            var zip = await Source.RetrievePythonZip(InstallPath).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(zip))
             {
                 Log("SetupPython: Error obtaining zip file from installation source");
@@ -100,7 +100,7 @@ namespace Python.Deployment
                 {
                     Log("SetupPython: Error extracting zip file: " + zip);
                 }
-            });
+            }).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -242,7 +242,7 @@ namespace Python.Deployment
 
             CopyEmbeddedResourceToFile(assembly, key, wheelPath, force);
 
-            await TryInstallPip();
+            await TryInstallPip().ConfigureAwait(false);
 
             RunCommand($"\"{pipPath}\" install \"{wheelPath}\"");
         }
@@ -291,7 +291,7 @@ namespace Python.Deployment
         /// </param>
         public static async Task PipInstallModule(string module_name, string version = "", bool force = false)
         {
-            await TryInstallPip();
+            await TryInstallPip().ConfigureAwait(false);
 
             if (IsModuleInstalled(module_name) && !force)
                 return;
@@ -328,7 +328,7 @@ namespace Python.Deployment
             try
             {
                 Log("Downloading Pip...");
-                await Downloader.Download(getPipUrl, getPipFilePath, progress => Log($"{progress:F2}%"));
+                await Downloader.Download(getPipUrl, getPipFilePath, progress => Log($"{progress:F2}%")).ConfigureAwait(false);
                 Log("Done!");
             }
             catch (Exception ex)
@@ -347,7 +347,7 @@ namespace Python.Deployment
             {
                 try
                 {
-                    await InstallPip();
+                    await InstallPip().ConfigureAwait(false);
                 }
                 catch
                 {
@@ -428,10 +428,6 @@ namespace Python.Deployment
                 };
                 process.StartInfo = startInfo;
                 process.Start();
-                // Note: see https://github.com/henon/Python.Included/issues/55#issuecomment-1634750418
-                // as to why the following lines are commented out
-                //process.BeginOutputReadLine();
-                //process.BeginErrorReadLine();
                 token.Register(() =>
                 {
                     try
@@ -441,12 +437,19 @@ namespace Python.Deployment
                     }
                     catch (Exception) { /* ignore */ }
                 });
-                // The documentation for Process.StandardOutput says to read before you wait otherwise you can deadlock!
-                string output = process.StandardOutput.ReadToEnd();
-                Log(output);
-                await Task.Run(() => { process.WaitForExit(); }, token);
+                // Read stdout and stderr in parallel to avoid deadlock
+                // (see https://github.com/henon/Python.Included/issues/55)
+                var outputTask = process.StandardOutput.ReadToEndAsync();
+                var errorTask = process.StandardError.ReadToEndAsync();
+                await Task.WhenAll(outputTask, errorTask).ConfigureAwait(false);
+                await Task.Run(() => { process.WaitForExit(); }, token).ConfigureAwait(false);
+                var output = outputTask.Result;
+                var error = errorTask.Result;
+                if (!string.IsNullOrEmpty(output))
+                    Log(output);
                 if (process.ExitCode != 0) {
-                    Log(process.StandardError.ReadToEnd());
+                    if (!string.IsNullOrEmpty(error))
+                        Log(error);
                     Log(" => exit code " + process.ExitCode);
                 }
             }

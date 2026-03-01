@@ -53,7 +53,7 @@ namespace Python.Deployment
                 try
                 {
                     Log("Downloading source...");
-                    await Downloader.Download(DownloadUrl, zipFile, progress => Log($"{progress:F2}%"));
+                    await Downloader.Download(DownloadUrl, zipFile, progress => Log($"{progress:F2}%")).ConfigureAwait(false);
                     Log("Done!");
                     return zipFile;
                 }
@@ -109,11 +109,7 @@ namespace Python.Deployment
                         WindowStyle = ProcessWindowStyle.Hidden,
                     };
                     process.StartInfo = startInfo;
-                    process.OutputDataReceived += (x, y) => Log(y.Data);
-                    process.ErrorDataReceived += (x, y) => Log(y.Data);
                     process.Start();
-                    process.BeginOutputReadLine();
-                    process.BeginErrorReadLine();
                     token.Register(() =>
                     {
                         try
@@ -123,12 +119,21 @@ namespace Python.Deployment
                         }
                         catch (Exception) { /* ignore */ }
                     });
-                    // The documentation for Process.StandardOutput says to read before you wait otherwise you can deadlock!
-                    string output = process.StandardOutput.ReadToEnd();
-                    Log(output);
-                    await Task.Run(() => { process.WaitForExit(); }, token);
+                    // Read stdout and stderr in parallel to avoid deadlock
+                    var outputTask = process.StandardOutput.ReadToEndAsync();
+                    var errorTask = process.StandardError.ReadToEndAsync();
+                    await Task.WhenAll(outputTask, errorTask).ConfigureAwait(false);
+                    await Task.Run(() => { process.WaitForExit(); }, token).ConfigureAwait(false);
+                    var output = outputTask.Result;
+                    var error = errorTask.Result;
+                    if (!string.IsNullOrEmpty(output))
+                        Log(output);
                     if (process.ExitCode != 0)
+                    {
+                        if (!string.IsNullOrEmpty(error))
+                            Log(error);
                         Log(" => exit code " + process.ExitCode);
+                    }
                 }
                 catch (Exception e)
                 {
