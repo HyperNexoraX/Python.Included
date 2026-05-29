@@ -20,6 +20,7 @@
     <PackageLicenseFile>LICENSE</PackageLicenseFile>
     <Title>Python.Included</Title>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <Platforms>AnyCPU;x64</Platforms>
   </PropertyGroup>
 
   <ItemGroup>
